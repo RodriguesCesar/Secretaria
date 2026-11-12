@@ -1,38 +1,53 @@
-using Microsoft.OpenApi;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Mvc;
 using Secretaria.api.Model.Settings;
 using Secretaria.api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+const string CorsPolicyName = "DefaultCorsPolicy";
+var allowedCorsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddOpenApi();
+builder.Services.AddHealthChecks();
+builder.Services.AddProblemDetails(options =>
+{
+	options.CustomizeProblemDetails = context =>
+	{
+		context.ProblemDetails.Extensions["traceId"] = context.HttpContext.TraceIdentifier;
+	};
+});
 
-// Configure CORS to allow browser clients to call the API (ajuste a origem conforme necessário)
-const string CorsPolicyName = "DefaultCorsPolicy";
 builder.Services.AddCors(options =>
 {
 	options.AddPolicy(CorsPolicyName, policy =>
 	{
-		policy
-			.AllowAnyOrigin()
-			.AllowAnyHeader()
-			.AllowAnyMethod();
+		if (builder.Environment.IsDevelopment())
+		{
+			policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
+			return;
+		}
+
+		if (allowedCorsOrigins.Length == 0)
+			throw new InvalidOperationException("Configure Cors:AllowedOrigins para ambientes não Development.");
+
+		policy.WithOrigins(allowedCorsOrigins).AllowAnyHeader().AllowAnyMethod();
 	});
 });
 
-// Bind Agent section from configuration to strongly-typed settings
-builder.Services.Configure<AgentSettings>(builder.Configuration.GetSection("Agent"));
-// Register domain services
+builder.Services
+	.AddOptions<AgentSettings>()
+	.Bind(builder.Configuration.GetSection("Agent"))
+	.ValidateDataAnnotations()
+	.ValidateOnStart();
+
 builder.Services.AddScoped<AtendimentoServices>();
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
 	app.MapOpenApi();
@@ -40,17 +55,39 @@ if (app.Environment.IsDevelopment())
 	app.UseSwaggerUI(c =>
 	{
 		c.SwaggerEndpoint("/swagger/v1/swagger.json", "Secretaria API v1");
-		c.RoutePrefix = string.Empty; // abre Swagger UI na raiz /
+		c.RoutePrefix = string.Empty;
 	});
 }
+else
+{
+	app.UseHsts();
+	app.UseHttpsRedirection();
+}
 
-// Não redireciona mais HTTP para HTTPS; API pode ser acessada via HTTP simples
+app.UseExceptionHandler(exceptionHandlerApp =>
+{
+	exceptionHandlerApp.Run(async context =>
+	{
+		var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+		var problem = new ProblemDetails
+		{
+			Status = StatusCodes.Status500InternalServerError,
+			Title = "Erro inesperado",
+			Detail = app.Environment.IsDevelopment()
+				? exception?.Message
+				: "Consulte o traceId para suporte."
+		};
 
-// Enable CORS middleware
+		problem.Extensions["traceId"] = context.TraceIdentifier;
+
+		context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+		await context.Response.WriteAsJsonAsync(problem);
+	});
+});
+
 app.UseCors(CorsPolicyName);
-
 app.UseAuthorization();
-
+app.MapHealthChecks("/health");
 app.MapControllers();
 
 app.Run();

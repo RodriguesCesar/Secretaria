@@ -11,19 +11,20 @@ namespace Secretaria.api.Services;
 public class AtendimentoServices
 {
     private readonly AgentSettings _agentSettings;
+    private readonly DefaultAzureCredential _credential = new();
 
     public AtendimentoServices(IOptions<AgentSettings> agentOptions)
     {
-        // Keep a local copy of the loaded AgentSettings values
         _agentSettings = agentOptions.Value;
     }
 
-    public async Task<string> GerarAtendimentoAsync(AtendimentoRequest request)
+    public Task<string> GerarAtendimentoAsync(AtendimentoRequest request, CancellationToken cancellationToken)
     {
         #pragma warning disable OPENAI001
 
-        AIProjectClient projectClient = new(endpoint: new Uri(_agentSettings.ProjectEndpoint), tokenProvider: new DefaultAzureCredential());
+        cancellationToken.ThrowIfCancellationRequested();
 
+        AIProjectClient projectClient = new(endpoint: new Uri(_agentSettings.ProjectEndpoint), tokenProvider: _credential);
         AgentReference agentReference = new(name: _agentSettings.AgentName, version: _agentSettings.AgentVersion);
         ProjectResponsesClient responseClient = projectClient.OpenAI.GetProjectResponsesClientForAgent(agentReference);
 
@@ -31,6 +32,6 @@ public class AtendimentoServices
            $"Meu nome é {request.Nome}, tenho a seguinte pergunta: {request.Mensagem}"
         );
 
-        return response.GetOutputText();
+        return Task.FromResult(response.GetOutputText());
     }
 }

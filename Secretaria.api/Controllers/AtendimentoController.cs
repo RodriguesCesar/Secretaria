@@ -16,10 +16,15 @@ public class AtendimentoController : ControllerBase
 	}
 
 	[HttpPost]
-	public async Task<IActionResult> PostAsync([FromBody] AtendimentoRequest request)
+	[ProducesResponseType(typeof(string), StatusCodes.Status200OK)]
+	[ProducesResponseType(StatusCodes.Status400BadRequest)]
+	[ProducesResponseType(StatusCodes.Status500InternalServerError)]
+	public async Task<IActionResult> PostAsync([FromBody] AtendimentoRequest request, CancellationToken cancellationToken)
 	{
-		var result = await _atendimentoServices.GerarAtendimentoAsync(request);
+		if (!ModelState.IsValid)
+			return ValidationProblem(ModelState);
+
+		var result = await _atendimentoServices.GerarAtendimentoAsync(request, cancellationToken);
 		return Ok(result);
 	}
 }
-
