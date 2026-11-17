@@ -20,6 +20,14 @@ API ASP.NET para atendimento da secretaria com integração ao Azure AI Projects
    - `MaxRetries`
    - `RetryDelayMilliseconds`
 
+5. Configure autenticação e rate limiting do endpoint de atendimento:
+   - `Authentication:AtendimentoApiKeys` (lista recomendada para rotação)
+   - `Authentication:AtendimentoApiKey` (compatibilidade com chave única)
+   - `Authentication:AllowAnonymousInDevelopment`
+   - `RateLimiting:Atendimento:PermitLimit`
+   - `RateLimiting:Atendimento:WindowSeconds`
+   - `RateLimiting:Atendimento:QueueLimit`
+
 ## Execução local
 
 ```bash
@@ -30,6 +38,17 @@ dotnet run --project Secretaria.api/Secretaria.api.csproj
 
 - `POST /api/atendimento`
 - `GET /health`
+
+### Autenticação do endpoint de atendimento
+
+`POST /api/atendimento` exige o header `X-Atendimento-Api-Key`.
+
+- Em ambientes não Development, pelo menos uma chave deve estar configurada.
+- Em Development, o bypass pode ser habilitado com `Authentication:AllowAnonymousInDevelopment=true`.
+
+### Rate limiting
+
+O endpoint `POST /api/atendimento` possui limitação de taxa configurável e retorna `429 Too Many Requests` quando excedido.
 
 ## Testes
 
@@ -52,4 +71,6 @@ Projeto de testes:
 - camada de cliente para Azure AI desacoplada do serviço de domínio;
 - política de resiliência com timeout e retry configuráveis;
 - suíte inicial de testes (integração e unitários);
+- autenticação por API key no endpoint de atendimento;
+- rate limiting no endpoint de atendimento;
 - pipeline de CI com restore, build e test em [ci.yml](./.github/workflows/ci.yml).
