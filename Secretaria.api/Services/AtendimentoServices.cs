@@ -1,37 +1,59 @@
-﻿using Azure.AI.Extensions.OpenAI;
-using Azure.AI.Projects;
-using Azure.Identity;
-using Microsoft.Extensions.Options;
-using OpenAI.Responses;
+﻿using Microsoft.Extensions.Options;
 using Secretaria.api.Model.Request;
 using Secretaria.api.Model.Settings;
 
 namespace Secretaria.api.Services;
 
-public class AtendimentoServices
+public class AtendimentoServices(
+    IAtendimentoClient atendimentoClient,
+    IOptions<AtendimentoResilienceSettings> resilienceOptions,
+    ILogger<AtendimentoServices> logger)
 {
-    private readonly AgentSettings _agentSettings;
-    private readonly DefaultAzureCredential _credential = new();
+    private readonly IAtendimentoClient _atendimentoClient = atendimentoClient;
+    private readonly AtendimentoResilienceSettings _resilience = resilienceOptions.Value;
+    private readonly ILogger<AtendimentoServices> _logger = logger;
 
-    public AtendimentoServices(IOptions<AgentSettings> agentOptions)
+    public async Task<string> GerarAtendimentoAsync(AtendimentoRequest request, CancellationToken cancellationToken)
     {
-        _agentSettings = agentOptions.Value;
-    }
-
-    public Task<string> GerarAtendimentoAsync(AtendimentoRequest request, CancellationToken cancellationToken)
-    {
-        #pragma warning disable OPENAI001
-
         cancellationToken.ThrowIfCancellationRequested();
 
-        AIProjectClient projectClient = new(endpoint: new Uri(_agentSettings.ProjectEndpoint), tokenProvider: _credential);
-        AgentReference agentReference = new(name: _agentSettings.AgentName, version: _agentSettings.AgentVersion);
-        ProjectResponsesClient responseClient = projectClient.OpenAI.GetProjectResponsesClientForAgent(agentReference);
+        var prompt = $"Meu nome é {request.Nome}, tenho a seguinte pergunta: {request.Mensagem}";
+        var timeout = TimeSpan.FromSeconds(_resilience.TimeoutSeconds);
 
-        ResponseResult response = responseClient.CreateResponse(
-           $"Meu nome é {request.Nome}, tenho a seguinte pergunta: {request.Mensagem}"
-        );
+        for (var attempt = 0; ; attempt++)
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(timeout);
 
-        return Task.FromResult(response.GetOutputText());
+            try
+            {
+                return await _atendimentoClient
+                    .GerarRespostaAsync(prompt, timeoutCts.Token)
+                    .WaitAsync(timeout, cancellationToken);
+            }
+            catch (TimeoutException) when (attempt < _resilience.MaxRetries)
+            {
+                _logger.LogWarning(
+                    "Timeout ao gerar atendimento. Tentativa {Attempt} de {MaxAttempts}.",
+                    attempt + 1,
+                    _resilience.MaxRetries + 1);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && attempt < _resilience.MaxRetries)
+            {
+                _logger.LogWarning(
+                    "Operação cancelada por timeout interno. Tentativa {Attempt} de {MaxAttempts}.",
+                    attempt + 1,
+                    _resilience.MaxRetries + 1);
+            }
+            catch (HttpRequestException) when (attempt < _resilience.MaxRetries)
+            {
+                _logger.LogWarning(
+                    "Falha de rede ao gerar atendimento. Tentativa {Attempt} de {MaxAttempts}.",
+                    attempt + 1,
+                    _resilience.MaxRetries + 1);
+            }
+
+            await Task.Delay(_resilience.RetryDelayMilliseconds, cancellationToken);
+        }
     }
 }

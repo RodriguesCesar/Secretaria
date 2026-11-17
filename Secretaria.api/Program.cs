@@ -44,6 +44,13 @@ builder.Services
 	.ValidateDataAnnotations()
 	.ValidateOnStart();
 
+builder.Services
+	.AddOptions<AtendimentoResilienceSettings>()
+	.Bind(builder.Configuration.GetSection("AtendimentoResilience"))
+	.ValidateDataAnnotations()
+	.ValidateOnStart();
+
+builder.Services.AddScoped<IAtendimentoClient, AzureAtendimentoClient>();
 builder.Services.AddScoped<AtendimentoServices>();
 
 var app = builder.Build();
@@ -91,3 +98,5 @@ app.MapHealthChecks("/health");
 app.MapControllers();
 
 app.Run();
+
+public partial class Program;

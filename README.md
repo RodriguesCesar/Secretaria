@@ -15,6 +15,11 @@ API ASP.NET para atendimento da secretaria com integração ao Azure AI Projects
 
 3. Configure CORS para produção em `Cors:AllowedOrigins`.
 
+4. Configure resiliência da chamada ao agente em `AtendimentoResilience`:
+   - `TimeoutSeconds`
+   - `MaxRetries`
+   - `RetryDelayMilliseconds`
+
 ## Execução local
 
 ```bash
@@ -26,6 +31,16 @@ dotnet run --project Secretaria.api/Secretaria.api.csproj
 - `POST /api/atendimento`
 - `GET /health`
 
+## Testes
+
+```bash
+dotnet test Secretaria.slnx
+```
+
+Projeto de testes:
+
+- `Secretaria.api.Tests`
+
 ## Melhorias implementadas
 
 - validação de entrada com DataAnnotations no request de atendimento;
@@ -34,4 +49,7 @@ dotnet run --project Secretaria.api/Secretaria.api.csproj
 - CORS restrito por ambiente (aberto apenas em Development);
 - validação de configurações críticas (`AgentSettings`) no startup;
 - redirecionamento HTTPS/HSTS em ambientes não Development;
+- camada de cliente para Azure AI desacoplada do serviço de domínio;
+- política de resiliência com timeout e retry configuráveis;
+- suíte inicial de testes (integração e unitários);
 - pipeline de CI com restore, build e test em [ci.yml](./.github/workflows/ci.yml).
