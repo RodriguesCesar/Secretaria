@@ -50,6 +50,27 @@ dotnet run --project Secretaria.api/Secretaria.api.csproj
 
 O endpoint `POST /api/atendimento` possui limitação de taxa configurável e retorna `429 Too Many Requests` quando excedido.
 
+### Telemetria de segurança
+
+A API registra eventos de segurança em logs estruturados com `traceId` para:
+
+- API key inválida no endpoint de atendimento;
+- rejeições por rate limiting;
+- configuração inválida de autenticação.
+
+Também publica métricas em `/metrics` (formato Prometheus):
+
+- `atendimento_auth_success_total`
+- `atendimento_auth_failures_total`
+- `atendimento_auth_config_errors_total`
+- `atendimento_rate_limit_rejections_total`
+
+Exemplos de consultas:
+
+- `sum(rate(atendimento_auth_failures_total[5m]))`
+- `sum(rate(atendimento_rate_limit_rejections_total[5m]))`
+- `sum(rate(atendimento_auth_success_total[5m]))`
+
 ## Testes
 
 ```bash
@@ -73,4 +94,5 @@ Projeto de testes:
 - suíte inicial de testes (integração e unitários);
 - autenticação por API key no endpoint de atendimento;
 - rate limiting no endpoint de atendimento;
+- telemetria de segurança com logs estruturados e métricas em `/metrics`;
 - pipeline de CI com restore, build e test em [ci.yml](./.github/workflows/ci.yml).

@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using OpenTelemetry.Metrics;
 using Secretaria.api.Model.Settings;
 using Secretaria.api.Services;
+using System.Diagnostics.Metrics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -23,11 +25,29 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddOpenApi();
 builder.Services.AddHealthChecks();
+builder.Services.AddOpenTelemetry()
+	.WithMetrics(metrics =>
+	{
+		metrics
+			.AddMeter(SecurityTelemetry.MeterName)
+			.AddAspNetCoreInstrumentation()
+			.AddPrometheusExporter();
+	});
 builder.Services.AddRateLimiter(options =>
 {
 	options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 	options.OnRejected = async (context, cancellationToken) =>
 	{
+		SecurityTelemetry.RateLimitRejections.Add(1);
+		var logger = context.HttpContext.RequestServices
+			.GetRequiredService<ILoggerFactory>()
+			.CreateLogger("Secretaria.api.Security");
+		logger.LogWarning(
+			"Rate limit exceeded for path {Path}. TraceId={TraceId} RemoteIp={RemoteIp}",
+			context.HttpContext.Request.Path,
+			context.HttpContext.TraceIdentifier,
+			context.HttpContext.Connection.RemoteIpAddress?.ToString());
+
 		if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
 		{
 			context.HttpContext.Response.Headers.RetryAfter =
@@ -133,6 +153,7 @@ app.UseExceptionHandler(exceptionHandlerApp =>
 });
 
 app.UseCors(CorsPolicyName);
+app.MapPrometheusScrapingEndpoint("/metrics");
 app.UseRateLimiter();
 app.Use(async (context, next) =>
 {
@@ -145,14 +166,26 @@ app.Use(async (context, next) =>
 	var allowAnonymousInDevelopment = app.Configuration.GetValue("Authentication:AllowAnonymousInDevelopment", true);
 	var configuredApiKeys = ReadConfiguredApiKeys(app.Configuration);
 	var bypassAuthentication = app.Environment.IsDevelopment() && allowAnonymousInDevelopment;
+	var logger = context.RequestServices
+		.GetRequiredService<ILoggerFactory>()
+		.CreateLogger("Secretaria.api.Security");
 
 	if (configuredApiKeys.Count == 0)
 	{
 		if (bypassAuthentication)
 		{
+			logger.LogWarning(
+				"Authentication bypass enabled in Development due to AllowAnonymousInDevelopment and no configured API key. TraceId={TraceId}",
+				context.TraceIdentifier);
 			await next();
 			return;
 		}
+
+		SecurityTelemetry.AuthConfigErrors.Add(1);
+		logger.LogError(
+			"Atendimento authentication is misconfigured: no API keys configured. Path={Path} TraceId={TraceId}",
+			context.Request.Path,
+			context.TraceIdentifier);
 
 		var configurationProblem = new ProblemDetails
 		{
@@ -170,6 +203,13 @@ app.Use(async (context, next) =>
 	var providedApiKey = context.Request.Headers[AtendimentoApiKeyHeaderName].ToString();
 	if (!IsValidApiKey(configuredApiKeys, providedApiKey))
 	{
+		SecurityTelemetry.AuthFailures.Add(1);
+		logger.LogWarning(
+			"Invalid API key for atendimento endpoint. Path={Path} TraceId={TraceId} RemoteIp={RemoteIp}",
+			context.Request.Path,
+			context.TraceIdentifier,
+			context.Connection.RemoteIpAddress?.ToString());
+
 		var problem = new ProblemDetails
 		{
 			Status = StatusCodes.Status401Unauthorized,
@@ -183,6 +223,7 @@ app.Use(async (context, next) =>
 		return;
 	}
 
+	SecurityTelemetry.AuthSuccess.Add(1);
 	await next();
 });
 app.UseAuthorization();
@@ -246,6 +287,32 @@ static bool IsValidApiKey(IReadOnlyList<string> expectedApiKeys, string provided
 	}
 
 	return false;
+}
+
+static class SecurityTelemetry
+{
+	public const string MeterName = "Secretaria.api.Security";
+	private static readonly Meter Meter = new(MeterName, "1.0.0");
+
+	public static readonly Counter<long> AuthSuccess = Meter.CreateCounter<long>(
+		"atendimento_auth_success_total",
+		unit: "{request}",
+		description: "Total de autenticações válidas no endpoint de atendimento.");
+
+	public static readonly Counter<long> AuthFailures = Meter.CreateCounter<long>(
+		"atendimento_auth_failures_total",
+		unit: "{request}",
+		description: "Total de tentativas inválidas de autenticação no endpoint de atendimento.");
+
+	public static readonly Counter<long> AuthConfigErrors = Meter.CreateCounter<long>(
+		"atendimento_auth_config_errors_total",
+		unit: "{request}",
+		description: "Total de requisições bloqueadas por configuração inválida de autenticação.");
+
+	public static readonly Counter<long> RateLimitRejections = Meter.CreateCounter<long>(
+		"atendimento_rate_limit_rejections_total",
+		unit: "{request}",
+		description: "Total de requisições rejeitadas por rate limiting no endpoint de atendimento.");
 }
 
 public partial class Program;
